@@ -18,4 +18,4 @@ docker run -it --rm \
   -v $PWD:/src \
   -w /src \
   -e GITHUB_TOKEN=${GITHUB_TOKEN} \
-  goreleaser/goreleaser:v0.125.0 release --rm-dist
+  goreleaser/goreleaser:v0.128.0 release --rm-dist
