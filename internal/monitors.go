@@ -44,7 +44,7 @@ func (m *monitorsClient) GetAll() (*ConfigElements, error) {
         }
         return &ConfigElements{
                 Elements: result,
-                Delegate: toInterfaceSlice(monitors),
+                Delegate: m.toInterfaceSlice(monitors),
         }, errors.WithMessage(err, "get all monitors")
 }
 
@@ -58,7 +58,7 @@ func (m *monitorsClient) GetById(id int) (interface{}, error) {
 
 func (m *monitorsClient) GetByName(name string) ([]interface{}, error) {
         monitors, err := m.ddClient.GetMonitorsByName(name)
-        return toInterfaceSlice(monitors), errors.WithMessage(err, "get monitors by name")
+        return m.toInterfaceSlice(monitors), errors.WithMessage(err, "get monitors by name")
 }
 
 func (m *monitorsClient) Create(e ConfigElement) (interface{}, error) {
@@ -69,7 +69,7 @@ func (m *monitorsClient) Delete(id int) error {
         return m.ddClient.DeleteMonitor(id)
 }
 
-func toInterfaceSlice(monitors []datadog.Monitor) []interface{} {
+func (m *monitorsClient) toInterfaceSlice(monitors []datadog.Monitor) []interface{} {
         result := make([]interface{}, len(monitors))
         for m := range monitors {
                 result[m] = monitors[m]
@@ -78,8 +78,8 @@ func toInterfaceSlice(monitors []datadog.Monitor) []interface{} {
 }
 
 type monitorConfigElement struct {
-        Name     string      `json:"name"`
-        Id       int         `json:"id"`
+        Name     string           `json:"name"`
+        Id       int              `json:"id"`
         Delegate *datadog.Monitor `json:"delegate"`
 }
 

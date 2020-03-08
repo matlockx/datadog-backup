@@ -16,7 +16,7 @@ type dashboardsClient struct {
 func NewDashboardsClient(ddClient *datadog.Client) DatadogConfigClient {
         return &dashboardsClient{
                 ddClient: ddClient,
-                log:      logrus.WithField("prefix", "monitors"),
+                log:      logrus.WithField("prefix", "dashboards"),
         }
 }
 
@@ -32,7 +32,6 @@ func (d *dashboardsClient) DecodeFile(file *os.File) ([]ConfigElement, error) {
         }
         return result, nil
 }
-
 
 func (d *dashboardsClient) GetAll() (*ConfigElements, error) {
         dashboards, err := d.ddClient.GetDashboards()
@@ -86,8 +85,8 @@ func (d *dashboardsClient) toInterfaceSlice(dashboards []datadog.Dashboard) []in
 }
 
 type dashboardConfigElement struct {
-        Name     string      `json:"name"`
-        Id       int         `json:"id"`
+        Name     string             `json:"name"`
+        Id       int                `json:"id"`
         Delegate *datadog.Dashboard `json:"delegate"`
 }
 

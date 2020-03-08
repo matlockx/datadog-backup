@@ -44,6 +44,7 @@ func NewBackupService(ddClient *datadog.Client, config BackupConfig) *backupServ
                 configClients: []DatadogConfigClient{
                         NewMonitorsClient(ddClient),
                         NewDashboardsClient(ddClient),
+                        NewDowntimesClient(ddClient),
                 },
         }
         if _, err := os.Stat(service.configDir); os.IsNotExist(err) {
@@ -211,13 +212,18 @@ func (b *backupService) delete(client DatadogConfigClient) error {
 func (b *backupService) backupFile(configClientName string) error {
         oldFile := fmt.Sprintf("%s/%s.yaml", b.configDir, configClientName)
         backupFile := fmt.Sprintf("%s/%d_%s.yaml", b.backupDir, time.Now().Unix(), configClientName)
-
-        old, err := ioutil.ReadFile(oldFile)
-        if err != nil {
-                return errors.WithMessagef(err, "backupFile: cannot read config file %s", oldFile)
+        _, err := os.Stat(oldFile)
+        if err == nil {
+                old, err := ioutil.ReadFile(oldFile)
+                if err != nil {
+                        return errors.WithMessagef(err, "backupFile: cannot read config file %s", oldFile)
+                }
+                err = ioutil.WriteFile(backupFile, old, 0644)
+                return errors.WithMessage(err, "backup")
+        } else if !os.IsNotExist(err) {
+                return errors.WithMessage(err, "backup")
         }
-        err = ioutil.WriteFile(backupFile, old, 0644)
-        return errors.WithMessage(err, "backup")
+        return nil
 }
 
 func (b *backupService) openConfigFile(name string, readOnly, append bool) (*os.File, error) {
