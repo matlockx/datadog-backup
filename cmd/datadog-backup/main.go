@@ -24,6 +24,8 @@ func main() {
                 DataDogApiKey  string `long:"api-key" description:"api key for datadog account" required:"true"`
                 DataDogAppKey  string `long:"app-key" description:"app key for datadog account" required:"true"`
                 Action         string `long:"action" choice:"push" choice:"pull" choice:"delete" description:"push, pull or delete"`
+                ConfigDir      string `long:"config-dir" default:"config" description:"config directory of monitors, dashboards, etc "`
+                BackupDir      string `long:"backup-dir" default:"backup" description:"backup dir for configs where to backup the old config file before pulling new entries from datadog"`
                 Sync           bool   `long:"sync" description:"sync config file with datadog"`
                 OverrideRemote bool   `long:"override-remote" description:"override remote monitor with local one"`
                 DryRun         bool   `long:"dry-run" description:"just show changes"`
@@ -44,7 +46,13 @@ func main() {
         }
 
         ddClient = datadog.NewClient(opts.DataDogApiKey, opts.DataDogAppKey)
-        backupClient := internal.NewBackupService(ddClient, opts.DryRun, opts.OverrideRemote, !opts.NoBackup)
+        backupClient := internal.NewBackupService(ddClient, internal.BackupConfig{
+                ConfigDir:      opts.ConfigDir,
+                BackupDir:      opts.BackupDir,
+                DryRun:         opts.DryRun,
+                OverrideRemote: opts.OverrideRemote,
+                DoBackup:       !opts.NoBackup,
+        })
 
         switch opts.Action {
         case "push":
@@ -56,7 +64,8 @@ func main() {
                 err := backupClient.Pull()
                 fatalOnError(err, "pull")
         case "delete":
-                deleteMonitors(opts.DryRun)
+                err := backupClient.Delete()
+                fatalOnError(err, "delete")
         }
 
 }

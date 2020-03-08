@@ -18,36 +18,74 @@ type backupService struct {
         overrideRemote bool
         dryRun         bool
         backup         bool
+        configClients  []DatadogConfigClient
+
+        configDir string
+        backupDir string
 }
 
-func NewBackupService(ddClient *datadog.Client, dryRun, overrideRemote, backup bool) *backupService {
-        return &backupService{
+type BackupConfig struct {
+        ConfigDir      string
+        BackupDir      string
+        DryRun         bool
+        OverrideRemote bool
+        DoBackup       bool
+}
+
+func NewBackupService(ddClient *datadog.Client, config BackupConfig) *backupService {
+        service := &backupService{
                 ddClient:       ddClient,
                 log:            logrus.WithField("prefix", "backup-service"),
-                overrideRemote: overrideRemote,
-                dryRun:         dryRun,
-                backup:         backup,
+                overrideRemote: config.OverrideRemote,
+                dryRun:         config.DryRun,
+                backup:         config.DoBackup,
+                configDir:      config.ConfigDir,
+                backupDir:      config.BackupDir,
+                configClients: []DatadogConfigClient{
+                        NewMonitorsClient(ddClient),
+                        NewDashboardsClient(ddClient),
+                },
         }
+        if _, err := os.Stat(service.configDir); os.IsNotExist(err) {
+                service.log.WithError(err).Fatal("config dir does not exist")
+        }
+        if _, err := os.Stat(service.backupDir); os.IsNotExist(err) && service.backup {
+                service.log.WithError(err).Fatal("backup dir does not exist")
+        }
+        return service
 }
 
 func (b *backupService) Pull() error {
-        monitorsClient := NewMonitorsClient(b.ddClient)
-        return b.pull(monitorsClient)
+        for _, c := range b.configClients {
+                if err := b.pull(c); err != nil {
+                        return errors.WithMessagef(err, "pull client %s", c.ConfigClientName())
+                }
+        }
+        return nil
 }
 
 func (b *backupService) Push() error {
-        monitorsClient := NewMonitorsClient(b.ddClient)
-        return b.push(monitorsClient)
+        for _, c := range b.configClients {
+                if err := b.push(c); err != nil {
+                        return errors.WithMessagef(err, "push client %s", c.ConfigClientName())
+                }
+        }
+        return nil
 }
 
 func (b *backupService) Delete() error {
-        monitorsClient := NewMonitorsClient(b.ddClient)
-        return b.delete(monitorsClient)
+        for _, c := range b.configClients {
+                if err := b.delete(c); err != nil {
+                        return errors.WithMessagef(err, "delete client %s", c.ConfigClientName())
+                }
+        }
+        return nil
 }
 
 func (b *backupService) push(client DatadogConfigClient) error {
+        logger := b.log.WithField("client", client.ConfigClientName())
         if b.overrideRemote {
-                logrus.Warnf("remote override active, will override remote monitors")
+                logger.Warnf("remote override active, will override remote monitors")
         }
 
         file, err := b.openConfigFile(b.configFilePath(client.ConfigClientName()), false, true)
@@ -65,7 +103,7 @@ func (b *backupService) push(client DatadogConfigClient) error {
                 if !b.dryRun {
                         name := configElement.GetName()
                         if name == "" {
-                                logrus.Errorf("push: configElement %+v has no name, skipping", configElement.GetDelegate())
+                                logger.Errorf("push: configElement %+v has no name, skipping", configElement.GetDelegate())
                                 continue
                         }
 
@@ -76,12 +114,12 @@ func (b *backupService) push(client DatadogConfigClient) error {
                                         if b.overrideRemote {
                                                 err := b.ddClient.DeleteMonitor(id)
                                                 if err != nil {
-                                                        logrus.WithError(err).Errorf("push: cannot delete remote configElement %+v", configElement)
+                                                        logger.WithError(err).Errorf("push: cannot delete remote configElement %+v", configElement)
                                                         continue
                                                 }
-                                                logrus.Warnf("push: deleted existing remote configElement with id %d, overriding it with version from file", id)
+                                                logger.Warnf("push: deleted existing remote configElement with id %d, overriding it with version from file", id)
                                         } else {
-                                                logrus.Warnf("push: found existing configElement with id %d, skipping it", id)
+                                                logger.Warnf("push: found existing configElement with id %d, skipping it", id)
                                                 continue
                                         }
                                 }
@@ -89,46 +127,46 @@ func (b *backupService) push(client DatadogConfigClient) error {
 
                         remoteElements, err := client.GetByName(name)
                         if err != nil {
-                                logrus.WithError(err).Warnf("push: cannot get monitors with name from %+v, trying to create a new one now", configElement)
+                                logger.WithError(err).Warnf("push: cannot get monitors with name from %+v, trying to create a new one now", configElement)
                         }
                         if len(remoteElements) > 0 {
-                                logrus.Warnf("push: configElement %+v has remote configElement with same name, skipping", configElement)
+                                logger.Warnf("push: configElement %+v has remote configElement with same name, skipping", configElement)
                                 continue
                         }
 
                         createdElement, err := client.Create(configElement)
                         if err != nil {
-                                logrus.WithError(err).Errorf("push: cannot create configElement %+v, skipping", configElement)
+                                logger.WithError(err).Errorf("push: cannot create configElement %+v, skipping", configElement)
                                 continue
                         }
-                        logrus.Infof("push: created configElement %#v", createdElement)
+                        logger.Infof("push: created configElement %#v", createdElement)
                 }
         }
         return nil
 }
 
 func (b *backupService) pull(client DatadogConfigClient) error {
-
-        configFilePath := b.configFilePath(client.ConfigClientName())
-        configFile, err := b.openConfigFile(configFilePath, false, true)
-        if err != nil {
-                return errors.WithMessage(err, "pull")
-        }
-        defer closeQuietly(configFile)
+        logger := b.log.WithField("client", client.ConfigClientName())
 
         if b.backup {
-                backupFile := b.configFilePath(fmt.Sprintf("%d_%s", time.Now().Unix(), client.ConfigClientName()))
-                err := b.backupFile(configFilePath, backupFile)
+                err := b.backupFile(client.ConfigClientName())
                 if err != nil {
                         return errors.WithMessage(err, "pull")
                 }
         }
 
+        configFilePath := b.configFilePath(client.ConfigClientName())
+        configFile, err := b.openConfigFile(configFilePath, false, false)
+        if err != nil {
+                return errors.WithMessage(err, "pull")
+        }
+        defer closeQuietly(configFile)
+
         configElements, err := client.GetAll()
         if err != nil {
                 return errors.WithMessage(err, "pull")
         }
-        b.log.Infof("writing %d config element(s) into configFile %s", len(configElements.Elements), configFile.Name())
+        logger.Infof("writing %d config element(s) into configFile %s", len(configElements.Elements), configFile.Name())
 
         encoder := yaml.NewEncoder(configFile)
         defer closeQuietly(encoder)
@@ -137,12 +175,48 @@ func (b *backupService) pull(client DatadogConfigClient) error {
         return errors.WithMessage(err, "pull")
 }
 
-func (b *backupService) backupFile(oldFile, newFile string) error {
+func (b *backupService) delete(client DatadogConfigClient) error {
+        logger := b.log.WithField("client", client.ConfigClientName())
+
+        file, err := b.openConfigFile(b.configFilePath(client.ConfigClientName()), true, true)
+        if err != nil {
+                return errors.WithMessage(err, "delete")
+        }
+        defer closeQuietly(file)
+        configElements, err := client.DecodeFile(file)
+        if err != nil {
+                return errors.WithMessagef(err, "delete: cannot decode file %s", file.Name())
+        }
+
+        for _, configElement := range configElements {
+                if !b.dryRun {
+
+                        id := configElement.GetId()
+                        if id != -1 {
+                                err = client.Delete(id)
+                                if err != nil {
+                                        logger.WithError(err).Errorf("delete: cannot delete element %d", id)
+                                        continue
+                                }
+                        } else {
+                                logger.WithError(err).Errorf("delete: cannot delete element, id is missing: %+v", configElement.GetDelegate())
+                        }
+
+                }
+                logger.Infof("deleted element %#v", configElement)
+        }
+        return nil
+}
+
+func (b *backupService) backupFile(configClientName string) error {
+        oldFile := fmt.Sprintf("%s/%s.yaml", b.configDir, configClientName)
+        backupFile := fmt.Sprintf("%s/%d_%s.yaml", b.backupDir, time.Now().Unix(), configClientName)
+
         old, err := ioutil.ReadFile(oldFile)
         if err != nil {
                 return errors.WithMessagef(err, "backupFile: cannot read config file %s", oldFile)
         }
-        err = ioutil.WriteFile(newFile, old, 0644)
+        err = ioutil.WriteFile(backupFile, old, 0644)
         return errors.WithMessage(err, "backup")
 }
 
@@ -162,34 +236,6 @@ func (b *backupService) openConfigFile(name string, readOnly, append bool) (*os.
         return monitorsFile, errors.WithMessagef(err, "cannot open file %s", name)
 }
 
-func (b *backupService) delete(client DatadogConfigClient) error {
-
-        configFile := b.configFilePath(client.ConfigClientName())
-        configElements, err := b.readConfigFile(configFile)
-        if err != nil {
-                return errors.WithMessagef(err, "delete: cannot read config file for %s", configFile)
-        }
-
-        for _, configElement := range configElements {
-                if !b.dryRun {
-
-                        id := configElement.GetId()
-                        if id != -1 {
-                                err = b.ddClient.DeleteMonitor(id)
-                                if err != nil {
-                                        logrus.WithError(err).Errorf("delete: cannot delete monitor %d", id)
-                                        continue
-                                }
-                        } else {
-                                logrus.WithError(err).Errorf("delete: cannot delete monitor, id is missing: %+v", configElement.GetDelegate())
-                        }
-
-                }
-                logrus.Infof("deleted monitor %#v", configElement)
-        }
-        return nil
-}
-
 func (b *backupService) readConfigFile(name string) ([]ConfigElement, error) {
         file, err := b.openConfigFile(name, true, true)
         if err != nil {
@@ -207,7 +253,7 @@ func (b *backupService) readConfigFile(name string) ([]ConfigElement, error) {
 }
 
 func (b *backupService) configFilePath(name string) string {
-        return "backup/" + name + ".yaml"
+        return b.configDir + "/" + name + ".yaml"
 }
 
 func closeQuietly(closer io.Closer) {
