@@ -101,47 +101,50 @@ func (b *backupService) push(client DatadogConfigClient) error {
         }
 
         for _, configElement := range configElements {
-                if !b.dryRun {
-                        name := configElement.GetName()
-                        if name == "" {
-                                logger.Errorf("push: configElement %+v has no name, skipping", configElement.GetDelegate())
-                                continue
-                        }
+                name := configElement.GetName()
+                if name == "" {
+                        logger.Errorf("push: configElement %+v has no name, skipping", configElement.GetDelegate())
+                        continue
+                }
 
-                        id := configElement.GetId()
-                        if id != -1 {
-                                remoteElement, err := client.GetById(id)
-                                if err == nil && remoteElement != nil {
-                                        if b.overrideRemote {
+                id := configElement.GetId()
+                if id != -1 {
+                        remoteElement, err := client.GetById(id)
+                        if err == nil && remoteElement != nil {
+                                if b.overrideRemote {
+                                        if !b.dryRun {
                                                 err := b.ddClient.DeleteMonitor(id)
                                                 if err != nil {
                                                         logger.WithError(err).Errorf("push: cannot delete remote configElement %+v", configElement)
                                                         continue
                                                 }
-                                                logger.Warnf("push: deleted existing remote configElement with id %d, overriding it with version from file", id)
-                                        } else {
-                                                logger.Warnf("push: found existing configElement with id %d, skipping it", id)
-                                                continue
                                         }
+                                        logger.Warnf("push: deleted existing remote configElement with id %d, overriding it with version from file", id)
+                                } else {
+                                        logger.Warnf("push: found existing configElement with id %d, skipping it", id)
+                                        continue
                                 }
                         }
+                }
 
-                        remoteElements, err := client.GetByName(name)
-                        if err != nil {
-                                logger.WithError(err).Warnf("push: cannot get monitors with name from %+v, trying to create a new one now", configElement)
-                        }
-                        if len(remoteElements) > 0 {
-                                logger.Warnf("push: configElement %+v has remote configElement with same name, skipping", configElement)
-                                continue
-                        }
-
-                        createdElement, err := client.Create(configElement)
+                remoteElements, err := client.GetByName(name)
+                if err != nil {
+                        logger.WithError(err).Warnf("push: cannot get monitors with name from %+v, trying to create a new one now", configElement)
+                }
+                if len(remoteElements) > 0 {
+                        logger.Warnf("push: configElement %+v has remote configElement with same name, skipping", configElement)
+                        continue
+                }
+                createdElement := configElement.GetDelegate()
+                if !b.dryRun {
+                        createdElement, err = client.Create(configElement)
                         if err != nil {
                                 logger.WithError(err).Errorf("push: cannot create configElement %+v, skipping", configElement)
                                 continue
                         }
-                        logger.Infof("push: created configElement %#v", createdElement)
                 }
+                logger.Infof("push: created configElement %#v", createdElement)
+
         }
         return nil
 }
@@ -149,7 +152,7 @@ func (b *backupService) push(client DatadogConfigClient) error {
 func (b *backupService) pull(client DatadogConfigClient) error {
         logger := b.log.WithField("client", client.ConfigClientName())
 
-        if b.backup {
+        if b.backup && !b.dryRun {
                 err := b.backupFile(client.ConfigClientName())
                 if err != nil {
                         return errors.WithMessage(err, "pull")
@@ -157,7 +160,7 @@ func (b *backupService) pull(client DatadogConfigClient) error {
         }
 
         configFilePath := b.configFilePath(client.ConfigClientName())
-        configFile, err := b.openConfigFile(configFilePath, false, false)
+        configFile, err := b.openConfigFile(configFilePath, false, b.dryRun)
         if err != nil {
                 return errors.WithMessage(err, "pull")
         }
@@ -169,11 +172,14 @@ func (b *backupService) pull(client DatadogConfigClient) error {
         }
         logger.Infof("writing %d config element(s) into configFile %s", len(configElements.Elements), configFile.Name())
 
-        encoder := yaml.NewEncoder(configFile)
-        defer closeQuietly(encoder)
+        if !b.dryRun {
+                encoder := yaml.NewEncoder(configFile)
+                defer closeQuietly(encoder)
 
-        err = encoder.Encode(configElements.Elements)
-        return errors.WithMessage(err, "pull")
+                err = encoder.Encode(configElements.Elements)
+                return errors.WithMessage(err, "pull")
+        }
+        return nil
 }
 
 func (b *backupService) delete(client DatadogConfigClient) error {
@@ -190,19 +196,18 @@ func (b *backupService) delete(client DatadogConfigClient) error {
         }
 
         for _, configElement := range configElements {
-                if !b.dryRun {
 
-                        id := configElement.GetId()
-                        if id != -1 {
+                id := configElement.GetId()
+                if id != -1 {
+                        if !b.dryRun {
                                 err = client.Delete(id)
                                 if err != nil {
                                         logger.WithError(err).Errorf("delete: cannot delete element %d", id)
                                         continue
                                 }
-                        } else {
-                                logger.WithError(err).Errorf("delete: cannot delete element, id is missing: %+v", configElement.GetDelegate())
                         }
-
+                } else {
+                        logger.WithError(err).Errorf("delete: cannot delete element, id is missing: %+v", configElement.GetDelegate())
                 }
                 logger.Infof("deleted element %#v", configElement)
         }
