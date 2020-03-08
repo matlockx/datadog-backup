@@ -18,6 +18,9 @@ builds:
     ignore:
       - goos: darwin
         goarch: 386
+dockers:
+  - image_templates:
+      - matlockx/datadog-backup
 archives:
   - name_template: '{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}'
     replacements:
